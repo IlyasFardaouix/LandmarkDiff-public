@@ -9,54 +9,64 @@ from PIL import Image
 from landmarkdiff.landmarks import extract_landmarks
 from landmarkdiff.manipulation import apply_procedure_preset
 from landmarkdiff.conditioning import render_wireframe
+from landmarkdiff.inference import LandmarkDiffPipeline
+from landmarkdiff.synthetic.tps_warp import warp_image_tps
 
+def load_image(image_path: str) -> Image:
+    """Load an image from a file path."""
+    return Image.open(image_path).convert("RGB").resize((512, 512))
 
-def main():
-    parser = argparse.ArgumentParser(description="Basic LandmarkDiff inference")
-    parser.add_argument("image", type=str, help="Path to input face image")
-    parser.add_argument("--procedure", type=str, default="rhinoplasty",
-                        choices=["rhinoplasty", "blepharoplasty", "rhytidectomy", "orthognathic"])
-    parser.add_argument("--intensity", type=float, default=60.0,
-                        help="Deformation intensity (0-100)")
-    parser.add_argument("--output", type=str, default="output/")
-    parser.add_argument("--mode", type=str, default="controlnet",
-                        choices=["controlnet", "img2img", "tps"])
-    args = parser.parse_args()
-
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # load image
-    img = Image.open(args.image).convert("RGB").resize((512, 512))
-    img_array = np.array(img)
-
-    # extract landmarks
-    print(f"Extracting landmarks from {args.image}...")
-    landmarks = extract_landmarks(img_array)
+def extract_landmarks_from_image(image_array: np.ndarray) -> object:
+    """Extract landmarks from an image array."""
+    landmarks = extract_landmarks(image_array)
     if landmarks is None:
-        print("No face detected in image")
-        return
+        raise ValueError("No face detected in image")
+    return landmarks
 
-    print(f"  Detected {len(landmarks.landmarks)} landmarks")
+def deform_landmarks(landmarks: object, procedure: str, intensity: float) -> object:
+    """Deform landmarks according to a procedure and intensity."""
+    return apply_procedure_preset(landmarks, procedure, intensity=intensity)
 
-    # deform landmarks
-    print(f"Applying {args.procedure} deformation (intensity={args.intensity})...")
-    deformed = apply_procedure_preset(landmarks, args.procedure, intensity=args.intensity)
+def render_wireframes(landmarks: object, size: tuple) -> np.ndarray:
+    """Render wireframes for original and deformed landmarks."""
+    original_mesh = render_wireframe(landmarks, size)
+    deformed_mesh = render_wireframe(landmarks, size)
+    return original_mesh, deformed_mesh
 
-    # visualize mesh (always works, no GPU)
-    original_mesh = render_wireframe(landmarks, (512, 512))
-    deformed_mesh = render_wireframe(deformed, (512, 512))
-
+def save_mesh_visualizations(output_dir: Path, original_mesh: np.ndarray, deformed_mesh: np.ndarray) -> None:
+    """Save mesh visualizations to an output directory."""
     import cv2
     cv2.imwrite(str(output_dir / "mesh_original.png"), original_mesh)
     cv2.imwrite(str(output_dir / "mesh_deformed.png"), deformed_mesh)
+
+def generate_prediction(args: argparse.Namespace) -> None:
+    """Generate a prediction using a diffusion pipeline or TPS."""
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load image
+    img = load_image(args.image)
+    img_array = np.array(img)
+
+    # Extract landmarks
+    print(f"Extracting landmarks from {args.image}...")
+    landmarks = extract_landmarks_from_image(img_array)
+
+    # Deform landmarks
+    print(f"Applying {args.procedure} deformation (intensity={args.intensity})...")
+    deformed = deform_landmarks(landmarks, args.procedure, args.intensity)
+
+    # Render wireframes
+    print(f"Rendering wireframes...")
+    original_mesh, deformed_mesh = render_wireframes(landmarks, (512, 512))
+
+    # Save mesh visualizations
+    save_mesh_visualizations(output_dir, original_mesh, deformed_mesh)
     print(f"  Saved mesh visualizations to {output_dir}/")
 
-    # full diffusion prediction (requires GPU)
+    # Generate prediction
     if args.mode in ("controlnet", "img2img"):
         try:
-            from landmarkdiff.inference import LandmarkDiffPipeline
-
             print("Loading diffusion pipeline...")
             pipeline = LandmarkDiffPipeline(mode=args.mode, device="cuda")
             pipeline.load()
@@ -77,8 +87,7 @@ def main():
             print("  Use --mode tps for CPU-only mode")
 
     elif args.mode == "tps":
-        from landmarkdiff.synthetic.tps_warp import warp_image_tps
-
+        # TPS warp
         src = landmarks.pixel_coords[:, :2].copy()
         dst = deformed.pixel_coords[:, :2].copy()
         src[:, 0] *= 512 / landmarks.image_width
@@ -92,6 +101,22 @@ def main():
 
     print("Done!")
 
+def main() -> None:
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description="Basic LandmarkDiff inference")
+    parser.add_argument("image", type=str, help="Path to input face image")
+    parser.add_argument("--procedure", type=str, default="rhinoplasty",
+                        choices=["rhinoplasty", "blepharoplasty", "rhytidectomy", "orthognathic"])
+    parser.add_argument("--intensity", type=float, default=60.0,
+                        help="Deformation intensity (0-100)")
+    parser.add_argument("--output", type=str, default="output/",
+                        help="Output directory")
+    parser.add_argument("--mode", type=str, default="controlnet",
+                        choices=["controlnet", "img2img", "tps"],
+                        help="Prediction mode")
+    args = parser.parse_args()
+
+    generate_prediction(args)
 
 if __name__ == "__main__":
     main()
