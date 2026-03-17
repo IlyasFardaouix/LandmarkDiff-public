@@ -1,8 +1,4 @@
-"""Compare all procedures side-by-side on a single face.
-
-This script generates a comparison grid of the original face and the face
-with each procedure applied.
-"""
+"""Compare all procedures side-by-side on a single face."""
 
 import argparse
 import numpy as np
@@ -14,47 +10,36 @@ from landmarkdiff.manipulation import apply_procedure_preset, PROCEDURE_LANDMARK
 from landmarkdiff.conditioning import render_wireframe
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
+def main():
     parser = argparse.ArgumentParser(description="Compare all procedures")
     parser.add_argument("image", type=str, help="Path to input face image")
     parser.add_argument("--intensity", type=float, default=60.0,
                         help="Deformation intensity (0-100)")
     parser.add_argument("--output", type=str, default="output/comparison.png")
-    return parser.parse_args()
+    args = parser.parse_args()
 
+    img = Image.open(args.image).convert("RGB").resize((512, 512))
+    img_array = np.array(img)
 
-def load_image(image_path: str) -> Image:
-    """Load face image from file."""
-    img = Image.open(image_path).convert("RGB").resize((512, 512))
-    return img
-
-
-def extract_landmarks_from_image(img_array: np.ndarray) -> np.ndarray:
-    """Extract face landmarks from image array."""
     landmarks = extract_landmarks(img_array)
     if landmarks is None:
         print("No face detected")
-        return None
-    return landmarks
+        return
 
-
-def render_procedure_comparison(landmarks: np.ndarray, procedures: list) -> list:
-    """Render comparison of original face and face with each procedure applied."""
+    procedures = list(PROCEDURE_LANDMARKS.keys())
     meshes = []
+
+    # original
     original_mesh = render_wireframe(landmarks, (512, 512))
     meshes.append(("Original", Image.fromarray(original_mesh)))
 
+    # each procedure
     for proc in procedures:
-        deformed = apply_procedure_preset(landmarks, proc, intensity=60.0)
+        deformed = apply_procedure_preset(landmarks, proc, intensity=args.intensity)
         mesh = render_wireframe(deformed, (512, 512))
         meshes.append((proc.capitalize(), Image.fromarray(mesh)))
 
-    return meshes
-
-
-def create_comparison_grid(meshes: list, output_path: Path) -> None:
-    """Create comparison grid of face with each procedure applied."""
+    # create grid
     n = len(meshes)
     grid = Image.new("L", (512 * n, 512 + 40), 0)
     draw = ImageDraw.Draw(grid)
@@ -63,24 +48,10 @@ def create_comparison_grid(meshes: list, output_path: Path) -> None:
         grid.paste(mesh, (512 * i, 40))
         draw.text((512 * i + 200, 10), name, fill=255)
 
+    output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     grid.save(str(output_path))
     print(f"Saved comparison grid to {output_path}")
-
-
-def main() -> None:
-    """Main entry point."""
-    args = parse_args()
-    img = load_image(args.image)
-    img_array = np.array(img)
-
-    landmarks = extract_landmarks_from_image(img_array)
-    if landmarks is None:
-        return
-
-    procedures = list(PROCEDURE_LANDMARKS.keys())
-    meshes = render_procedure_comparison(landmarks, procedures)
-    create_comparison_grid(meshes, Path(args.output))
 
 
 if __name__ == "__main__":
